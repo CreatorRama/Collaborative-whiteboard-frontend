@@ -12,21 +12,32 @@ function App() {
   const [redoStack, setRedoStack] = useState([]);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState("Connecting...");
   const stageRef = useRef(null);
   const nameInputRef = useRef(null);
   const [senderName, setSenderName] = useState("");
   const wsRef = useRef(null);
   const chatContainerRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
 
-  useEffect(() => {
-    // Connect to WebSocket server
-    wsRef.current = new WebSocket('wss://collaborative-whiteboard-backend-n4qk.onrender.com');
+  const connectWebSocket = () => {
+    // Clear any existing reconnection timeouts
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+    }
 
-    wsRef.current.onopen = () => {
+    setConnectionStatus("Connecting...");
+    
+    // Create new WebSocket connection
+    const socket = new WebSocket('wss://collaborative-whiteboard-backend-n4qk.onrender.com');
+    wsRef.current = socket;
+
+    socket.onopen = () => {
       console.log('Connected to WebSocket server');
+      setConnectionStatus("Connected");
     };
 
-    wsRef.current.onmessage = (event) => {
+    socket.onmessage = (event) => {
       console.log('Raw message received:', event.data);
       try {
         const message = JSON.parse(event.data);
@@ -52,13 +63,31 @@ function App() {
       }
     };
 
-    wsRef.current.onerror = (error) => {
+    socket.onerror = (error) => {
       console.error('WebSocket error:', error);
+      setConnectionStatus("Error - Reconnecting...");
     };
+
+    socket.onclose = () => {
+      console.log('WebSocket connection closed');
+      setConnectionStatus("Disconnected - Reconnecting...");
+      
+      // Set up reconnection attempt
+      reconnectTimeoutRef.current = setTimeout(() => {
+        connectWebSocket();
+      }, 3000); // Try to reconnect after 3 seconds
+    };
+  };
+
+  useEffect(() => {
+    connectWebSocket();
 
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
       }
     };
   }, []);
@@ -128,15 +157,15 @@ function App() {
 
   const handleChatSubmit = () => {
     if (!senderName || !text.trim()) return;
-
-    // Don't add the message locally anymore since we'll get it back from the server
-    // with proper synchronization
     
     // Send message to server
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(
         JSON.stringify({ type: "CHAT", res: text.trim(), Name: senderName })
       );
+    } else {
+      // Handle case when websocket is not connected
+      alert("Cannot send message - not connected to server. Please wait for reconnection.");
     }
 
     setText("");
@@ -178,6 +207,14 @@ function App() {
           <button onClick={undo} disabled={undoStack.length === 0} style={{ marginRight: '5px' }}>Undo</button>
           <button onClick={redo} disabled={redoStack.length === 0} style={{ marginRight: '5px' }}>Redo</button>
           <button onClick={clearCanvas} style={{ marginRight: '5px' }}>Clear</button>
+          <span style={{ 
+            marginLeft: '15px', 
+            fontWeight: 'bold',
+            color: connectionStatus === "Connected" ? "green" : 
+                   connectionStatus.includes("Error") ? "red" : "orange"
+          }}>
+            Status: {connectionStatus}
+          </span>
         </div>
         <div style={{ marginBottom: '10px' }}>
           <label style={{ marginRight: '10px' }}>
@@ -297,7 +334,7 @@ function App() {
                 {message.Name}:
               </div>
               <div style={{ 
-                backgroundColor: message.Name === senderName ? "#e3f2fd" : "red",
+                backgroundColor: message.Name === senderName ? "#e3f2fd" : "#f8f9fa",
                 padding: "5px 10px",
                 borderRadius: "4px",
                 wordBreak: "break-word"
@@ -332,15 +369,15 @@ function App() {
             />
             <button
               onClick={handleChatSubmit}
-              disabled={!text.trim()}
+              disabled={!text.trim() || wsRef.current?.readyState !== WebSocket.OPEN}
               style={{ 
                 backgroundColor: "#007bff", 
                 color: "white", 
                 border: "none", 
                 padding: "8px 12px",
                 borderRadius: "4px",
-                cursor: text.trim() ? "pointer" : "not-allowed",
-                opacity: text.trim() ? 1 : 0.7
+                cursor: text.trim() && wsRef.current?.readyState === WebSocket.OPEN ? "pointer" : "not-allowed",
+                opacity: text.trim() && wsRef.current?.readyState === WebSocket.OPEN ? 1 : 0.7
               }}
             >
               Send
